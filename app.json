@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Sticrix",
+    "slug": "sticrix",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FDFBF7"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourname.sticrix",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFF8E7"
+      },
+      "package": "com.yourname.sticrix",
+      "versionCode": 1
+    },
+    "extra": {
+      "eas": {
+        "projectId": "78e971a8-ba2a-40c3-8363-d52c3c537ef5"
+      }
+    },
+    "owner": "akifumi.h",
+    "plugins": [
+      "expo-localization"
+    ]
+  }
+}
