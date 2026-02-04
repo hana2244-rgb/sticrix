@@ -37,7 +37,8 @@
     },
     "owner": "akifumi.h",
     "plugins": [
-      "expo-localization"
+      "expo-localization",
+      "expo-asset"
     ]
   }
 }
