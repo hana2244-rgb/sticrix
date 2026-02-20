@@ -17,6 +17,13 @@ import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Localization from 'expo-localization';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { requireNativeModule } from 'expo-modules-core';
+import Constants from 'expo-constants';
+import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
+
+// AdMob: 本番用バナー広告ユニットID
+const BANNER_AD_UNIT_ID = __DEV__ ? TestIds.BANNER : 'ca-app-pub-4182152923139643/3195968265';
+const isExpoGo = Constants.appOwnership === 'expo';
 
 // ============================================
 // 多言語対応 (i18n)
@@ -68,8 +75,9 @@ const TRANSLATIONS = {
 };
 
 const getLanguage = () => {
-  const locale = Localization.locale || 'en';
-  return locale.startsWith('ja') ? 'ja' : 'en';
+  const locales = Localization.getLocales();
+  const locale = locales?.[0]?.languageCode || 'en';
+  return locale === 'ja' ? 'ja' : 'en';
 };
 
 const LanguageContext = createContext('en');
@@ -110,11 +118,11 @@ const getDefaultLabels = (lang) => ({
 });
 
 const getInitialTasks = (lang) => [
-  { id: 1, text: TRANSLATIONS[lang].task1, color: 'sakura', x: 75, y: 20, column: 'col1', quadrant: 'q1', order: 0, kanbanOrder: 0 },
-  { id: 2, text: TRANSLATIONS[lang].task2, color: 'matcha', x: 60, y: 45, column: 'col1', quadrant: 'q2', order: 0, kanbanOrder: 1 },
-  { id: 3, text: TRANSLATIONS[lang].task3, color: 'sora', x: 30, y: 70, column: 'col2', quadrant: 'q3', order: 0, kanbanOrder: 0 },
-  { id: 4, text: TRANSLATIONS[lang].task4, color: 'cream', x: 20, y: 85, column: 'col3', quadrant: 'q4', order: 0, kanbanOrder: 0 },
-  { id: 5, text: TRANSLATIONS[lang].task5, color: 'fuji', x: 85, y: 15, column: 'col1', quadrant: 'q1', order: 1, kanbanOrder: 2 },
+  { id: 1, text: TRANSLATIONS[lang].task1, color: 'sakura', x: 75, y: 20, column: 'col1', quadrant: 'q1', order: 0, kanbanOrder: 0, qx: 20, qy: 20 },
+  { id: 2, text: TRANSLATIONS[lang].task2, color: 'matcha', x: 60, y: 45, column: 'col1', quadrant: 'q2', order: 0, kanbanOrder: 1, qx: 30, qy: 25 },
+  { id: 3, text: TRANSLATIONS[lang].task3, color: 'sora', x: 30, y: 70, column: 'col2', quadrant: 'q3', order: 0, kanbanOrder: 0, qx: 15, qy: 30 },
+  { id: 4, text: TRANSLATIONS[lang].task4, color: 'cream', x: 20, y: 85, column: 'col3', quadrant: 'q4', order: 0, kanbanOrder: 0, qx: 40, qy: 20 },
+  { id: 5, text: TRANSLATIONS[lang].task5, color: 'fuji', x: 85, y: 15, column: 'col1', quadrant: 'q1', order: 1, kanbanOrder: 2, qx: 55, qy: 45 },
 ];
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -142,43 +150,69 @@ const Storage = {
 // 付箋コンポーネント
 // ============================================
 
-const StickyNote = ({ task, onDrag, onLongPress, onDelete, isEditing, onEditComplete, editText, setEditText }) => {
+const StickyNote = ({ task, onDrag, onDragStart, onDragMove, onDragEnd, onLongPress, onDelete, isEditing, onEditComplete, editText, setEditText }) => {
   const colorConfig = STICKY_COLORS.find(c => c.id === task.color) || STICKY_COLORS[0];
   const pan = useRef(new Animated.ValueXY()).current;
   const scale = useRef(new Animated.Value(1)).current;
   const longPressTimer = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
   const t = useTranslation();
+
+  const propsRef = useRef({ task, onDrag, onDragStart, onDragMove, onDragEnd, onLongPress, isEditing });
+  propsRef.current = { task, onDrag, onDragStart, onDragMove, onDragEnd, onLongPress, isEditing };
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => !isEditing,
-      onMoveShouldSetPanResponder: (_, g) => !isEditing && (Math.abs(g.dx) > 5 || Math.abs(g.dy) > 5),
+      onStartShouldSetPanResponder: () => !propsRef.current.isEditing,
+      onMoveShouldSetPanResponder: (_, g) => !propsRef.current.isEditing && (Math.abs(g.dx) > 5 || Math.abs(g.dy) > 5),
+      onShouldBlockNativeResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
-        longPressTimer.current = setTimeout(() => onLongPress?.(task.id), 500);
-        Animated.spring(scale, { toValue: 1.05, useNativeDriver: true }).start();
+        const p = propsRef.current;
+        longPressTimer.current = setTimeout(() => p.onLongPress?.(p.task.id), 500);
+        Animated.spring(scale, { toValue: 1.1, useNativeDriver: true }).start();
       },
-      onPanResponderMove: (_, g) => {
-        if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
+      onPanResponderMove: (evt, g) => {
+        const p = propsRef.current;
+        if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+          setIsDragging(true);
+          p.onDragStart?.(p.task);
+        }
         pan.setValue({ x: g.dx, y: g.dy });
+        p.onDragMove?.(p.task, g, evt.nativeEvent);
       },
       onPanResponderRelease: (evt, g) => {
+        const p = propsRef.current;
         if (longPressTimer.current) { clearTimeout(longPressTimer.current); }
+        setIsDragging(false);
         Animated.spring(scale, { toValue: 1, useNativeDriver: true }).start();
         Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-        onDrag?.(task, g, evt.nativeEvent);
+        p.onDrag?.(p.task, g, evt.nativeEvent);
+        p.onDragEnd?.();
       },
     })
   ).current;
 
   return (
     <Animated.View
-      {...(isEditing ? {} : panResponder.panHandlers)}
+      {...panResponder.panHandlers}
       style={[
         styles.stickyNote,
         {
           backgroundColor: colorConfig.bg,
           borderColor: colorConfig.border,
           transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale }],
+        },
+        isDragging && {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 12 },
+          shadowOpacity: 0.4,
+          shadowRadius: 16,
+          elevation: 999,
+          opacity: 0.85,
+          zIndex: 9999,
         },
       ]}
     >
@@ -189,6 +223,8 @@ const StickyNote = ({ task, onDrag, onLongPress, onDelete, isEditing, onEditComp
             style={[styles.stickyEditInput, { color: colorConfig.text }]}
             value={editText}
             onChangeText={setEditText}
+            placeholder={t('newTask')}
+            placeholderTextColor={colorConfig.border}
             autoFocus
             multiline
             maxLength={50}
@@ -213,7 +249,7 @@ const StickyNote = ({ task, onDrag, onLongPress, onDelete, isEditing, onEditComp
 // 編集可能ラベル
 // ============================================
 
-const EditableLabel = ({ value, onChange, style }) => {
+const EditableLabel = ({ value, onChange, style, containerStyle }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(value);
 
@@ -227,20 +263,22 @@ const EditableLabel = ({ value, onChange, style }) => {
 
   if (isEditing) {
     return (
-      <TextInput
-        style={[styles.editableLabelInput, style]}
-        value={editValue}
-        onChangeText={setEditValue}
-        onBlur={handleSubmit}
-        onSubmitEditing={handleSubmit}
-        autoFocus
-        maxLength={20}
-      />
+      <View style={containerStyle}>
+        <TextInput
+          style={[styles.editableLabelInput, style]}
+          value={editValue}
+          onChangeText={setEditValue}
+          onBlur={handleSubmit}
+          onSubmitEditing={handleSubmit}
+          autoFocus
+          maxLength={20}
+        />
+      </View>
     );
   }
 
   return (
-    <TouchableOpacity onPress={() => setIsEditing(true)}>
+    <TouchableOpacity style={containerStyle} onPress={() => setIsEditing(true)}>
       <Text style={[styles.editableLabel, style]}>{value}</Text>
     </TouchableOpacity>
   );
@@ -253,6 +291,7 @@ const EditableLabel = ({ value, onChange, style }) => {
 const XYAxisView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelete, editingId, onEditComplete, editText, setEditText }) => {
   const containerRef = useRef(null);
   const [layout, setLayout] = useState({ width: 0, height: 0, x: 0, y: 0 });
+  const [draggingId, setDraggingId] = useState(null);
 
   const handleDrag = (task, gestureState, nativeEvent) => {
     if (layout.width === 0) return;
@@ -266,8 +305,8 @@ const XYAxisView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelet
 
   return (
     <View style={styles.matrixContainer}>
-      <Text style={[styles.xyLabel, styles.xyLabelY]}>{labels.y}</Text>
-      <Text style={[styles.xyLabel, styles.xyLabelX]}>{labels.x}</Text>
+      <EditableLabel value={labels.y} onChange={(val) => onLabelChange('xy', 'y', val)} containerStyle={[styles.xyLabel, styles.xyLabelY]} style={styles.xyLabelText} />
+      <EditableLabel value={labels.x} onChange={(val) => onLabelChange('xy', 'x', val)} containerStyle={[styles.xyLabel, styles.xyLabelX]} style={styles.xyLabelText} />
       <View style={styles.xyArrowY}>
         <View style={styles.arrowLine} />
         <View style={styles.arrowHeadUp} />
@@ -288,10 +327,12 @@ const XYAxisView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelet
           </React.Fragment>
         ))}
         {tasks.map((task) => (
-          <View key={task.id} style={[styles.xyTaskWrapper, { left: `${task.x}%`, top: `${100 - task.y}%` }]}>
+          <View key={task.id} style={[styles.xyTaskWrapper, { left: `${task.x}%`, top: `${100 - task.y}%` }, draggingId === task.id && { zIndex: 999 }]}>
             <StickyNote
               task={task}
               onDrag={(t, g, e) => handleDrag(t, g, e)}
+              onDragStart={(t) => setDraggingId(t.id)}
+              onDragEnd={() => setDraggingId(null)}
               onLongPress={onLongPress}
               onDelete={onDelete}
               isEditing={editingId === task.id}
@@ -310,31 +351,69 @@ const XYAxisView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelet
 // カンバンモード
 // ============================================
 
-const KanbanView = ({ tasks, labels, onDrag, onLongPress, onDelete, editingId, onEditComplete, editText, setEditText }) => {
+const KanbanView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelete, editingId, onEditComplete, editText, setEditText }) => {
   const columns = ['col1', 'col2', 'col3'];
   const columnLayouts = useRef({});
+  const taskLayouts = useRef({});
+  const [dragging, setDragging] = useState(false);
+  const [activeColumn, setActiveColumn] = useState(null);
+  const [draggingFromColumn, setDraggingFromColumn] = useState(null);
 
   const getColumnTasks = (col) => tasks.filter(t => t.column === col).sort((a, b) => (a.kanbanOrder || 0) - (b.kanbanOrder || 0));
 
-  const handleDrag = (task, gestureState, nativeEvent) => {
-    const dropX = nativeEvent.pageX;
+  const detectColumn = (pageX) => {
     for (const [col, layout] of Object.entries(columnLayouts.current)) {
-      if (layout && dropX >= layout.x && dropX <= layout.x + layout.width) {
-        if (task.column !== col) {
-          const maxOrder = Math.max(0, ...tasks.filter(t => t.column === col).map(t => t.kanbanOrder || 0));
-          onDrag(task.id, { column: col, kanbanOrder: maxOrder + 1 });
-        }
-        break;
+      if (layout && pageX >= layout.x && pageX <= layout.x + layout.width) {
+        return col;
       }
+    }
+    return null;
+  };
+
+  const calcInsertOrder = (col, taskId, dropY, orderKey) => {
+    const siblings = tasks
+      .filter(t => t[col === undefined ? 'quadrant' : 'column'] === col && t.id !== taskId)
+      .sort((a, b) => (a[orderKey] || 0) - (b[orderKey] || 0));
+    let insertIdx = siblings.length;
+    for (let i = 0; i < siblings.length; i++) {
+      const ly = taskLayouts.current[siblings[i].id];
+      if (ly && dropY < ly.pageY + ly.height / 2) { insertIdx = i; break; }
+    }
+    const prev = insertIdx > 0 ? (siblings[insertIdx - 1][orderKey] || 0) : 0;
+    const next = insertIdx < siblings.length ? (siblings[insertIdx][orderKey] || 0) : prev + 2;
+    return prev + (next - prev) / 2;
+  };
+
+  const handleDragMove = (task, gestureState, nativeEvent) => {
+    const col = detectColumn(nativeEvent.pageX);
+    setActiveColumn(col);
+  };
+
+  const handleDrag = (task, gestureState, nativeEvent) => {
+    const col = detectColumn(nativeEvent.pageX);
+    if (!col) return;
+    if (task.column !== col) {
+      const maxOrder = Math.max(0, ...tasks.filter(t => t.column === col).map(t => t.kanbanOrder || 0));
+      onDrag(task.id, { column: col, kanbanOrder: maxOrder + 1 });
+    } else {
+      const newOrder = calcInsertOrder(col, task.id, nativeEvent.pageY, 'kanbanOrder');
+      onDrag(task.id, { kanbanOrder: newOrder });
     }
   };
 
   return (
-    <View style={styles.kanbanContainer}>
+    <View style={[styles.kanbanContainer, dragging && { overflow: 'visible' }]}>
       {columns.map((col) => (
         <View
           key={col}
-          style={styles.kanbanColumn}
+          style={[
+            styles.kanbanColumn,
+            col === 'col1' && styles.kanbanCol1,
+            col === 'col2' && styles.kanbanCol2,
+            col === 'col3' && styles.kanbanCol3,
+            activeColumn === col && styles.kanbanColumnHighlight,
+            draggingFromColumn === col && { zIndex: 100, elevation: 100, overflow: 'visible' },
+          ]}
           onLayout={(e) => {
             e.target.measure((x, y, width, height, pageX, pageY) => {
               columnLayouts.current[col] = { x: pageX, y: pageY, width, height };
@@ -342,17 +421,33 @@ const KanbanView = ({ tasks, labels, onDrag, onLongPress, onDelete, editingId, o
           }}
         >
           <View style={styles.kanbanHeader}>
-            <Text style={styles.kanbanTitle}>{labels[col]}</Text>
+            <EditableLabel value={labels[col]} onChange={(val) => onLabelChange('kanban', col, val)} style={styles.kanbanTitle} />
             <View style={styles.kanbanCount}>
               <Text style={styles.kanbanCountText}>{tasks.filter(t => t.column === col).length}</Text>
             </View>
           </View>
-          <ScrollView style={styles.kanbanTasks} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={[styles.kanbanTasks, draggingFromColumn === col && { overflow: 'visible' }]}
+            contentContainerStyle={draggingFromColumn === col ? { overflow: 'visible' } : undefined}
+            showsVerticalScrollIndicator={false}
+            scrollEnabled={!dragging}
+          >
             {getColumnTasks(col).map((task) => (
-              <View key={task.id} style={styles.kanbanTaskWrapper}>
+              <View
+                key={task.id}
+                style={styles.kanbanTaskWrapper}
+                onLayout={(e) => {
+                  e.target.measure((x, y, w, h, pX, pY) => {
+                    taskLayouts.current[task.id] = { pageY: pY, height: h };
+                  });
+                }}
+              >
                 <StickyNote
                   task={task}
                   onDrag={(t, g, e) => handleDrag(t, g, e)}
+                  onDragStart={() => { setDragging(true); setDraggingFromColumn(col); }}
+                  onDragMove={(t, g, e) => handleDragMove(t, g, e)}
+                  onDragEnd={() => { setDragging(false); setActiveColumn(null); setDraggingFromColumn(null); }}
                   onLongPress={onLongPress}
                   onDelete={onDelete}
                   isEditing={editingId === task.id}
@@ -373,22 +468,69 @@ const KanbanView = ({ tasks, labels, onDrag, onLongPress, onDelete, editingId, o
 // 4分割モード
 // ============================================
 
-const QuadrantView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelete, editingId, onEditComplete, editText, setEditText }) => {
+const QuadrantView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDelete, editingId, onEditComplete, editText, setEditText, isTablet }) => {
   const quadrants = ['q1', 'q2', 'q3', 'q4'];
   const quadrantLayouts = useRef({});
+  const taskLayouts = useRef({});
+  const [dragging, setDragging] = useState(false);
+  const [activeQuadrant, setActiveQuadrant] = useState(null);
+  const [draggingFromQuadrant, setDraggingFromQuadrant] = useState(null);
 
   const getQuadrantTasks = (q) => tasks.filter(t => t.quadrant === q).sort((a, b) => (a.order || 0) - (b.order || 0));
 
-  const handleDrag = (task, gestureState, nativeEvent) => {
-    const dropX = nativeEvent.pageX;
-    const dropY = nativeEvent.pageY;
+  const detectQuadrant = (pageX, pageY) => {
     for (const [q, layout] of Object.entries(quadrantLayouts.current)) {
-      if (layout && dropX >= layout.x && dropX <= layout.x + layout.width && dropY >= layout.y && dropY <= layout.y + layout.height) {
-        if (task.quadrant !== q) {
-          const maxOrder = Math.max(0, ...tasks.filter(t => t.quadrant === q).map(t => t.order || 0));
-          onDrag(task.id, { quadrant: q, order: maxOrder + 1 });
-        }
-        break;
+      if (layout && pageX >= layout.x && pageX <= layout.x + layout.width && pageY >= layout.y && pageY <= layout.y + layout.height) {
+        return q;
+      }
+    }
+    return null;
+  };
+
+  const calcInsertOrder = (q, taskId, dropY) => {
+    const siblings = tasks
+      .filter(t => t.quadrant === q && t.id !== taskId)
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+    let insertIdx = siblings.length;
+    for (let i = 0; i < siblings.length; i++) {
+      const ly = taskLayouts.current[siblings[i].id];
+      if (ly && dropY < ly.pageY + ly.height / 2) { insertIdx = i; break; }
+    }
+    const prev = insertIdx > 0 ? (siblings[insertIdx - 1].order || 0) : 0;
+    const next = insertIdx < siblings.length ? (siblings[insertIdx].order || 0) : prev + 2;
+    return prev + (next - prev) / 2;
+  };
+
+  const handleDragMove = (task, gestureState, nativeEvent) => {
+    const q = detectQuadrant(nativeEvent.pageX, nativeEvent.pageY);
+    setActiveQuadrant(q);
+  };
+
+  const handleDrag = (task, gestureState, nativeEvent) => {
+    const q = detectQuadrant(nativeEvent.pageX, nativeEvent.pageY);
+    if (!q) return;
+    if (isTablet) {
+      // iPad: free-position within quadrant using percentage coordinates
+      const layout = quadrantLayouts.current[q];
+      if (!layout) return;
+      const relX = ((nativeEvent.pageX - layout.x) / layout.width) * 100;
+      const relY = ((nativeEvent.pageY - layout.y) / layout.height) * 100;
+      const qx = Math.max(5, Math.min(85, relX));
+      const qy = Math.max(10, Math.min(85, relY));
+      if (task.quadrant !== q) {
+        const maxOrder = Math.max(0, ...tasks.filter(t => t.quadrant === q).map(t => t.order || 0));
+        onDrag(task.id, { quadrant: q, order: maxOrder + 1, qx, qy });
+      } else {
+        onDrag(task.id, { qx, qy });
+      }
+    } else {
+      // Phone: list-based ordering
+      if (task.quadrant !== q) {
+        const maxOrder = Math.max(0, ...tasks.filter(t => t.quadrant === q).map(t => t.order || 0));
+        onDrag(task.id, { quadrant: q, order: maxOrder + 1 });
+      } else {
+        const newOrder = calcInsertOrder(q, task.id, nativeEvent.pageY);
+        onDrag(task.id, { order: newOrder });
       }
     }
   };
@@ -400,76 +542,95 @@ const QuadrantView = ({ tasks, labels, onLabelChange, onDrag, onLongPress, onDel
     q4: [styles.quadrantCell, styles.quadrantQ4],
   };
 
-  return (
-    <View style={styles.quadrantContainer}>
-      <Text style={[styles.quadrantLabel, styles.quadrantLabelTop]}>{labels.axisTop}</Text>
-      <Text style={[styles.quadrantLabel, styles.quadrantLabelBottom]}>{labels.axisBottom}</Text>
-      <Text style={[styles.quadrantLabel, styles.quadrantLabelLeft]}>{labels.axisLeft}</Text>
-      <Text style={[styles.quadrantLabel, styles.quadrantLabelRight]}>{labels.axisRight}</Text>
-      <View style={styles.quadrantGrid}>
-        {/* Row 1: q2, q1 */}
-        <View style={styles.quadrantRow}>
-          {['q2', 'q1'].map((q) => (
+  const renderQuadrant = (q) => (
+    <View
+      key={q}
+      style={[
+        quadrantStyles[q],
+        activeQuadrant === q && styles.quadrantCellHighlight,
+        draggingFromQuadrant === q && { zIndex: 100, elevation: 100, overflow: 'visible' },
+      ]}
+      onLayout={(e) => {
+        e.target.measure((x, y, width, height, pageX, pageY) => {
+          quadrantLayouts.current[q] = { x: pageX, y: pageY, width, height };
+        });
+      }}
+    >
+      <EditableLabel value={labels[q]} onChange={(val) => onLabelChange('quadrant', q, val)} style={styles.quadrantCellLabel} />
+      {isTablet ? (
+        <View style={[styles.quadrantTasksFree, draggingFromQuadrant === q && { overflow: 'visible' }]}>
+          {getQuadrantTasks(q).map((task) => (
             <View
-              key={q}
-              style={quadrantStyles[q]}
-              onLayout={(e) => {
-                e.target.measure((x, y, width, height, pageX, pageY) => {
-                  quadrantLayouts.current[q] = { x: pageX, y: pageY, width, height };
-                });
-              }}
+              key={task.id}
+              style={[styles.quadrantTaskFree, { left: `${task.qx ?? 20}%`, top: `${task.qy ?? 20}%` }]}
             >
-              <EditableLabel value={labels[q]} onChange={(val) => onLabelChange('quadrant', q, val)} style={styles.quadrantCellLabel} />
-              <ScrollView style={styles.quadrantTasks} showsVerticalScrollIndicator={false}>
-                {getQuadrantTasks(q).map((task) => (
-                  <View key={task.id} style={styles.quadrantTaskWrapper}>
-                    <StickyNote
-                      task={task}
-                      onDrag={(t, g, e) => handleDrag(t, g, e)}
-                      onLongPress={onLongPress}
-                      onDelete={onDelete}
-                      isEditing={editingId === task.id}
-                      onEditComplete={onEditComplete}
-                      editText={editText}
-                      setEditText={setEditText}
-                    />
-                  </View>
-                ))}
-              </ScrollView>
+              <StickyNote
+                task={task}
+                onDrag={(t, g, e) => handleDrag(t, g, e)}
+                onDragStart={() => { setDragging(true); setDraggingFromQuadrant(q); }}
+                onDragMove={(t, g, e) => handleDragMove(t, g, e)}
+                onDragEnd={() => { setDragging(false); setActiveQuadrant(null); setDraggingFromQuadrant(null); }}
+                onLongPress={onLongPress}
+                onDelete={onDelete}
+                isEditing={editingId === task.id}
+                onEditComplete={onEditComplete}
+                editText={editText}
+                setEditText={setEditText}
+              />
             </View>
           ))}
         </View>
-        {/* Row 2: q4, q3 */}
-        <View style={styles.quadrantRow}>
-          {['q4', 'q3'].map((q) => (
+      ) : (
+        <ScrollView
+          style={[styles.quadrantTasks, draggingFromQuadrant === q && { overflow: 'visible' }]}
+          contentContainerStyle={draggingFromQuadrant === q ? { overflow: 'visible' } : undefined}
+          showsVerticalScrollIndicator={false}
+          scrollEnabled={!dragging}
+        >
+          {getQuadrantTasks(q).map((task) => (
             <View
-              key={q}
-              style={quadrantStyles[q]}
+              key={task.id}
+              style={styles.quadrantTaskWrapper}
               onLayout={(e) => {
-                e.target.measure((x, y, width, height, pageX, pageY) => {
-                  quadrantLayouts.current[q] = { x: pageX, y: pageY, width, height };
+                e.target.measure((x, y, w, h, pX, pY) => {
+                  taskLayouts.current[task.id] = { pageY: pY, height: h };
                 });
               }}
             >
-              <EditableLabel value={labels[q]} onChange={(val) => onLabelChange('quadrant', q, val)} style={styles.quadrantCellLabel} />
-              <ScrollView style={styles.quadrantTasks} showsVerticalScrollIndicator={false}>
-                {getQuadrantTasks(q).map((task) => (
-                  <View key={task.id} style={styles.quadrantTaskWrapper}>
-                    <StickyNote
-                      task={task}
-                      onDrag={(t, g, e) => handleDrag(t, g, e)}
-                      onLongPress={onLongPress}
-                      onDelete={onDelete}
-                      isEditing={editingId === task.id}
-                      onEditComplete={onEditComplete}
-                      editText={editText}
-                      setEditText={setEditText}
-                    />
-                  </View>
-                ))}
-              </ScrollView>
+              <StickyNote
+                task={task}
+                onDrag={(t, g, e) => handleDrag(t, g, e)}
+                onDragStart={() => { setDragging(true); setDraggingFromQuadrant(q); }}
+                onDragMove={(t, g, e) => handleDragMove(t, g, e)}
+                onDragEnd={() => { setDragging(false); setActiveQuadrant(null); setDraggingFromQuadrant(null); }}
+                onLongPress={onLongPress}
+                onDelete={onDelete}
+                isEditing={editingId === task.id}
+                onEditComplete={onEditComplete}
+                editText={editText}
+                setEditText={setEditText}
+              />
             </View>
           ))}
+        </ScrollView>
+      )}
+    </View>
+  );
+
+  return (
+    <View style={[styles.quadrantContainer, dragging && { overflow: 'visible' }]}>
+      <EditableLabel value={labels.axisTop} onChange={(val) => onLabelChange('quadrant', 'axisTop', val)} containerStyle={[styles.quadrantLabel, styles.quadrantLabelTop]} style={styles.quadrantLabelText} />
+      <EditableLabel value={labels.axisBottom} onChange={(val) => onLabelChange('quadrant', 'axisBottom', val)} containerStyle={[styles.quadrantLabel, styles.quadrantLabelBottom]} style={styles.quadrantLabelText} />
+      <EditableLabel value={labels.axisLeft} onChange={(val) => onLabelChange('quadrant', 'axisLeft', val)} containerStyle={[styles.quadrantLabel, styles.quadrantLabelLeft]} style={styles.quadrantLabelText} />
+      <EditableLabel value={labels.axisRight} onChange={(val) => onLabelChange('quadrant', 'axisRight', val)} containerStyle={[styles.quadrantLabel, styles.quadrantLabelRight]} style={styles.quadrantLabelText} />
+      <View style={[styles.quadrantGrid, dragging && { overflow: 'visible' }]}>
+        {/* Row 1: q2, q1 */}
+        <View style={[styles.quadrantRow, dragging && { overflow: 'visible' }, (draggingFromQuadrant === 'q2' || draggingFromQuadrant === 'q1') && { zIndex: 100, elevation: 100 }]}>
+          {['q2', 'q1'].map(renderQuadrant)}
+        </View>
+        {/* Row 2: q4, q3 */}
+        <View style={[styles.quadrantRow, dragging && { overflow: 'visible' }, (draggingFromQuadrant === 'q4' || draggingFromQuadrant === 'q3') && { zIndex: 100, elevation: 100 }]}>
+          {['q4', 'q3'].map(renderQuadrant)}
         </View>
         <View style={styles.quadrantAxisH} />
         <View style={styles.quadrantAxisV} />
@@ -556,11 +717,13 @@ function AppContent({ lang }) {
       const savedTasks = await Storage.get('sticrix_tasks');
       const savedLabels = await Storage.get('sticrix_labels');
       const savedMode = await Storage.get('sticrix_mode');
-      const savedNextId = await Storage.get('sticrix_nextId');
-      if (savedTasks) setTasks(savedTasks);
+      if (savedTasks) {
+        setTasks(savedTasks);
+        const maxId = savedTasks.reduce((max, t) => Math.max(max, t.id || 0), 0);
+        nextId.current = maxId + 1;
+      }
       if (savedLabels) setLabels(prev => ({ ...prev, ...savedLabels }));
       if (savedMode) setCurrentMode(savedMode);
-      if (savedNextId) nextId.current = savedNextId;
     };
     loadData();
   }, []);
@@ -569,8 +732,34 @@ function AppContent({ lang }) {
     Storage.set('sticrix_tasks', tasks);
     Storage.set('sticrix_labels', labels);
     Storage.set('sticrix_mode', currentMode);
-    Storage.set('sticrix_nextId', nextId.current);
   }, [tasks, labels, currentMode]);
+
+  // Widget sync: send Q1 tasks to iOS widget
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    try {
+      const mod = requireNativeModule('ReactNativeWidgetExtension');
+      const q1Tasks = tasks
+        .filter(task => task.quadrant === 'q1')
+        .sort((a, b) => (a.order || 0) - (b.order || 0))
+        .map(task => ({ id: task.id, text: task.text || t('newTask'), color: task.color, order: task.order || 0 }));
+      mod.setWidgetData(JSON.stringify(q1Tasks));
+    } catch (e) {
+      // Widget module not available
+    }
+  }, [tasks, t]);
+
+  // Widget sync: send Q1 label to iOS widget
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    try {
+      const mod = requireNativeModule('ReactNativeWidgetExtension');
+      const q1Label = labels.quadrant?.q1 || 'Important & Urgent';
+      mod.setWidgetLabel(q1Label);
+    } catch (e) {
+      // Widget module not available (e.g. Expo Go)
+    }
+  }, [labels]);
 
   const handleDrag = useCallback((taskId, updates) => {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));
@@ -589,12 +778,13 @@ function AppContent({ lang }) {
   }, [tasks]);
 
   const handleEditComplete = useCallback((id, newText) => {
-    if (newText.trim()) {
-      setTasks(prev => prev.map(t => t.id === id ? { ...t, text: newText.trim() } : t));
-    }
+    const trimmed = newText.trim();
+    setTasks(prev => prev.map(task =>
+      task.id === id ? { ...task, text: trimmed || t('newTask') } : task
+    ));
     setEditingId(null);
     setEditText('');
-  }, []);
+  }, [t]);
 
   const handleDelete = useCallback((id) => {
     setTasks(prev => prev.filter(t => t.id !== id));
@@ -603,7 +793,7 @@ function AppContent({ lang }) {
   const handleAddTask = useCallback(() => {
     const newTask = {
       id: nextId.current++,
-      text: t('newTask'),
+      text: '',
       color: newTaskColor,
       x: 50,
       y: 50,
@@ -611,9 +801,11 @@ function AppContent({ lang }) {
       quadrant: 'q1',
       order: Date.now(),
       kanbanOrder: Date.now(),
+      qx: 10 + Math.random() * 50,
+      qy: 15 + Math.random() * 40,
     };
     setTasks(prev => [...prev, newTask]);
-    setEditText(newTask.text);
+    setEditText('');
     setEditingId(newTask.id);
   }, [newTaskColor, t]);
 
@@ -641,7 +833,7 @@ function AppContent({ lang }) {
       <View style={styles.main}>
         {currentMode === MODES.XY && <XYAxisView {...viewProps} />}
         {currentMode === MODES.KANBAN && <KanbanView {...viewProps} />}
-        {currentMode === MODES.QUADRANT && <QuadrantView {...viewProps} />}
+        {currentMode === MODES.QUADRANT && <QuadrantView {...viewProps} isTablet={isTablet} />}
       </View>
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
@@ -653,6 +845,21 @@ function AppContent({ lang }) {
           onPress={() => setShowColorPicker(true)}
         />
       </View>
+
+      {!isExpoGo && (
+        <View style={[styles.adBannerContainer, { paddingBottom: insets.bottom || 8 }]}>
+          <BannerAd
+            unitId={BANNER_AD_UNIT_ID}
+            size={BannerAdSize.ADAPTIVE_BANNER}
+            requestOptions={{
+              requestNonPersonalizedAdsOnly: true,
+            }}
+            onAdFailedToLoad={(error) => {
+              console.warn('Ad failed to load:', error.code, error.message);
+            }}
+          />
+        </View>
+      )}
 
 
       <ColorPicker
@@ -781,7 +988,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#E8DCC4',
     position: 'relative',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   xyGridLineH: {
     position: 'absolute',
@@ -806,13 +1013,18 @@ const styles = StyleSheet.create({
     color: '#8B7355',
   },
   xyLabelY: {
-    left: 0,
+    left: -12,
     top: '50%',
     transform: [{ rotate: '-90deg' }, { translateX: -20 }],
   },
   xyLabelX: {
-    bottom: 4,
+    bottom: 0,
     right: 20,
+  },
+  xyLabelText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#8B7355',
   },
   xyArrowY: {
     position: 'absolute',
@@ -870,9 +1082,17 @@ const styles = StyleSheet.create({
   },
   kanbanColumn: {
     flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.4)',
     borderRadius: 16,
     padding: 12,
+  },
+  kanbanCol1: { backgroundColor: 'rgba(227,242,253,0.5)' },
+  kanbanCol2: { backgroundColor: 'rgba(255,243,224,0.5)' },
+  kanbanCol3: { backgroundColor: 'rgba(232,245,233,0.5)' },
+  kanbanColumnHighlight: {
+    backgroundColor: 'rgba(200,230,255,0.6)',
+    borderWidth: 2,
+    borderColor: '#90CAF9',
+    borderStyle: 'dashed',
   },
   kanbanHeader: {
     flexDirection: 'row',
@@ -928,7 +1148,13 @@ const styles = StyleSheet.create({
   quadrantQ1: { backgroundColor: 'rgba(255,228,232,0.4)' },
   quadrantQ2: { backgroundColor: 'rgba(232,245,233,0.4)' },
   quadrantQ3: { backgroundColor: 'rgba(255,243,224,0.4)' },
-  quadrantQ4: { backgroundColor: 'rgba(245,245,245,0.4)' },
+  quadrantQ4: { backgroundColor: 'rgba(237,231,246,0.4)' },
+  quadrantCellHighlight: {
+    borderWidth: 2,
+    borderColor: '#90CAF9',
+    borderStyle: 'dashed',
+    backgroundColor: 'rgba(200,230,255,0.5)',
+  },
   quadrantCellLabel: {
     fontSize: 11,
     fontWeight: '500',
@@ -942,17 +1168,27 @@ const styles = StyleSheet.create({
   quadrantTaskWrapper: {
     marginBottom: 6,
   },
+  quadrantTasksFree: {
+    flex: 1,
+    position: 'relative',
+  },
+  quadrantTaskFree: {
+    position: 'absolute',
+    transform: [{ translateX: -50 }, { translateY: -20 }],
+  },
   quadrantLabel: {
     position: 'absolute',
+    zIndex: 20,
+  },
+  quadrantLabelText: {
     fontSize: 11,
     fontWeight: '600',
     color: '#A08B70',
     letterSpacing: 1,
-    zIndex: 20,
   },
   quadrantLabelTop: { top: 4, left: '50%', transform: [{ translateX: -20 }] },
   quadrantLabelBottom: { bottom: 0, left: '50%', transform: [{ translateX: -20 }] },
-  quadrantLabelLeft: { left: 2, top: '50%', transform: [{ rotate: '-90deg' }, { translateX: -20 }] },
+  quadrantLabelLeft: { left: -18, top: '50%', transform: [{ rotate: '-90deg' }, { translateX: -20 }] },
   quadrantLabelRight: { right: -8, top: '50%', transform: [{ rotate: '90deg' }, { translateX: 20 }] },
   quadrantAxisH: {
     position: 'absolute',
@@ -1085,6 +1321,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 4,
     elevation: 3,
+  },
+  adBannerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   colorPickerOverlay: {
     flex: 1,

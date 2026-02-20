@@ -19,3 +19,7 @@ web-build/
 
 # EAS
 google-service-account.json
+
+# Windows reserved name (Git cannot add files named 'nul')
+nul
+/NUL

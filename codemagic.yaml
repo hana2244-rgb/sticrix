@@ -1,0 +1,83 @@
+# Sticrix - Codemagic CI/CD
+# https://docs.codemagic.io/yaml-quick-start/building-a-react-native-app/
+# 事前に Codemagic UI で以下を設定してください:
+# - Team integrations > App Store Connect API Key (参照名: codemagic)
+# - Code signing identities > iOS: 証明書・プロビジョニングプロファイル
+#    (Bundle ID: com.Akifumi.H.sticrix および拡張用 com.Akifumi.H.sticrix.*)
+
+workflows:
+  ios-sticrix:
+    name: Sticrix iOS
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: codemagic
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.Akifumi.H.sticrix
+      vars:
+        XCODE_WORKSPACE: "Sticrix.xcworkspace"
+        XCODE_SCHEME: "Sticrix"
+        BUNDLE_ID: "com.Akifumi.H.sticrix"
+        # App Store Connect > アプリ > 一般 > App 情報 の「Apple ID」に置き換えてください
+        APP_ID: "YOUR_APP_STORE_CONNECT_APP_ID"
+      node: 20
+      xcode: 16.4
+      cocoapods: default
+    triggering:
+      events:
+        - push
+        - tag
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+        - pattern: master
+          include: true
+          source: true
+    scripts:
+      - name: npm 依存関係のインストール
+        script: |
+          npm ci
+      - name: Expo Prebuild (iOS)
+        script: |
+          npx expo prebuild --platform ios --clean
+      - name: Info.plist に ITSAppUsesNonExemptEncryption を設定
+        script: |
+          PLIST="$CM_BUILD_DIR/ios/Sticrix/Info.plist"
+          if [ -f "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :ITSAppUsesNonExemptEncryption false" "$PLIST"
+          fi
+      - name: CocoaPods のインストール
+        script: |
+          cd ios && pod install
+      - name: ビルド番号のインクリメント（オプション）
+        script: |
+          cd "$CM_BUILD_DIR/ios"
+          if command -v app-store-connect &>/dev/null && [ -n "$APP_ID" ] && [ "$APP_ID" != "YOUR_APP_STORE_CONNECT_APP_ID" ]; then
+            LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_ID" 2>/dev/null) || true
+            NEW=$((LATEST + 1))
+            agvtool new-version -all "$NEW" 2>/dev/null || true
+          fi
+      - name: コード署名の設定
+        script: |
+          xcode-project use-profiles --warn-only
+      - name: IPA ビルド
+        script: |
+          xcode-project build-ipa \
+            --workspace "$CM_BUILD_DIR/ios/$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+      email:
+        recipients:
+          - user@example.com
+        notify:
+          success: true
+          failure: true
