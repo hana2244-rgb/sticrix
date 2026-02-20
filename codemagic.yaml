@@ -1,30 +1,29 @@
-# Sticrix - Codemagic CI/CD
-# https://docs.codemagic.io/yaml-quick-start/building-a-react-native-app/
-# 事前に Codemagic UI で以下を設定してください:
-# - Team integrations > App Store Connect API Key (参照名: codemagic)
-# - Code signing identities > iOS: 証明書・プロビジョニングプロファイル
-#    (Bundle ID: com.Akifumi.H.sticrix および拡張用 com.Akifumi.H.sticrix.*)
+# Sticrix - Codemagic CI/CD（捨て写 C:\ws\sutesho の codemagic.yaml を参考にした Sticrix 用）
+# 事前に Codemagic UI で: Code signing identities に iOS 証明書・プロファイル（com.Akifumi.H.sticrix および com.Akifumi.H.sticrix.*）
+#
+# ★ Sticrix 用に必ず変更すること:
+#   - APP_STORE_APPLE_ID: Sticrix の App Store Connect「App 情報」→ Apple ID（数字）に置き換え
+#   - app_store_connect: 捨て写と同じキーなら Codemagic_App、別名なら Codemagic の「Manage keys」の名前と一致させる
+#   - email.recipients: 通知を受け取るメールアドレスに変更
 
 workflows:
   ios-sticrix:
     name: Sticrix iOS
     max_build_duration: 120
     instance_type: mac_mini_m2
-    integrations:
-      app_store_connect: codemagic
     environment:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.Akifumi.H.sticrix
       vars:
-        XCODE_WORKSPACE: "Sticrix.xcworkspace"
-        XCODE_SCHEME: "Sticrix"
         BUNDLE_ID: "com.Akifumi.H.sticrix"
-        # App Store Connect > アプリ > 一般 > App 情報 の「Apple ID」に置き換えてください
-        APP_ID: "YOUR_APP_STORE_CONNECT_APP_ID"
+        # ★ 要変更: Sticrix の App Store Connect > アプリ > 一般 > App 情報 の「Apple ID」に置き換え
+        APP_STORE_APPLE_ID: "6758619621"
       node: 20
       xcode: 16.4
       cocoapods: default
+    integrations:
+      app_store_connect: Codemagic_App
     triggering:
       events:
         - push
@@ -56,28 +55,41 @@ workflows:
       - name: ビルド番号のインクリメント（オプション）
         script: |
           cd "$CM_BUILD_DIR/ios"
-          if command -v app-store-connect &>/dev/null && [ -n "$APP_ID" ] && [ "$APP_ID" != "YOUR_APP_STORE_CONNECT_APP_ID" ]; then
-            LATEST=$(app-store-connect get-latest-app-store-build-number "$APP_ID" 2>/dev/null) || true
-            NEW=$((LATEST + 1))
+          if command -v app-store-connect &>/dev/null && [ -n "$APP_STORE_APPLE_ID" ] && [ "$APP_STORE_APPLE_ID" != "YOUR_APP_STORE_CONNECT_APP_ID" ]; then
+            LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null) || true
+            if [ -n "$LATEST" ] && [ "$LATEST" -ge 0 ] 2>/dev/null; then
+              NEW=$((LATEST + 1))
+            else
+              NEW=$((3 + ${BUILD_NUMBER:-0}))
+            fi
             agvtool new-version -all "$NEW" 2>/dev/null || true
           fi
       - name: コード署名の設定
+        script: xcode-project use-profiles
+      - name: IPA ビルド（ワークスペース・スキームは prebuild 結果から自動検出）
         script: |
-          xcode-project use-profiles --warn-only
-      - name: IPA ビルド
-        script: |
+          cd "$CM_BUILD_DIR"
+          WORKSPACE_PATH=$(find ios -maxdepth 1 -name "*.xcworkspace" -type d | head -1)
+          if [ -z "$WORKSPACE_PATH" ]; then
+            echo "Error: No .xcworkspace found in ios/."
+            ls -la ios/
+            exit 1
+          fi
+          SCHEME_NAME=$(basename "$WORKSPACE_PATH" .xcworkspace)
+          echo "Using workspace: $WORKSPACE_PATH, scheme: $SCHEME_NAME"
           xcode-project build-ipa \
-            --workspace "$CM_BUILD_DIR/ios/$XCODE_WORKSPACE" \
-            --scheme "$XCODE_SCHEME"
+            --workspace "$WORKSPACE_PATH" \
+            --scheme "$SCHEME_NAME"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:
         auth: integration
+        submit_to_testflight: true
       email:
         recipients:
-          - user@example.com
+          - user@example.com   # ★ 要変更: ビルド通知を受け取るメールアドレスに
         notify:
           success: true
           failure: true
